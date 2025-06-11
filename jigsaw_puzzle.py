@@ -3,6 +3,7 @@ from PIL import Image, ImageDraw
 import os
 from typing import List, Tuple, Dict
 import random
+import math
 
 
 class JigsawPuzzle:
@@ -41,9 +42,24 @@ class JigsawPuzzle:
                 # Randomly assign tab (1) or blank (-1)
                 self.v_edges[r, c] = random.choice([1, -1])
     
+    def bezier_curve(self, t: float, p0: Tuple[float, float], p1: Tuple[float, float], 
+                     p2: Tuple[float, float], p3: Tuple[float, float]) -> Tuple[float, float]:
+        """Calculate point on cubic Bezier curve at parameter t."""
+        # AIDEV-NOTE: Cubic Bezier formula: B(t) = (1-t)³P0 + 3(1-t)²tP1 + 3(1-t)t²P2 + t³P3
+        u = 1 - t
+        tt = t * t
+        uu = u * u
+        uuu = uu * u
+        ttt = tt * t
+        
+        x = uuu * p0[0] + 3 * uu * t * p1[0] + 3 * u * tt * p2[0] + ttt * p3[0]
+        y = uuu * p0[1] + 3 * uu * t * p1[1] + 3 * u * tt * p2[1] + ttt * p3[1]
+        
+        return (x, y)
+    
     def create_tab_path(self, start_x: float, start_y: float, end_x: float, end_y: float, 
                        tab_direction: int, is_horizontal: bool) -> List[Tuple[float, float]]:
-        """Create a path for a single edge with optional tab/blank."""
+        """Create a smooth path for a single edge with optional tab/blank using Bezier curves."""
         if tab_direction == 0:  # Straight edge
             return [(start_x, start_y), (end_x, end_y)]
         
@@ -51,66 +67,218 @@ class JigsawPuzzle:
         mid_x = (start_x + end_x) / 2
         mid_y = (start_y + end_y) / 2
         
+        path = []
+        
         if is_horizontal:
             edge_length = abs(end_x - start_x)
-            tab_radius = edge_length * self.tab_size / 2
-            neck_width = tab_radius * self.tab_neck_ratio
+            # AIDEV-NOTE: Adjusted tab parameters for smoother, bulbous shape
+            tab_height = edge_length * self.tab_size * 0.8  # Height of the tab
+            neck_width = edge_length * 0.15  # Width of the neck (narrower than bulb)
+            bulb_width = edge_length * 0.25  # Width of the bulb (wider than neck)
             
-            # Create tab/blank path
-            path = [(start_x, start_y)]
+            # Starting point
+            path.append((start_x, start_y))
             
-            # Move to neck start
-            neck_start_x = mid_x - neck_width
-            path.append((neck_start_x, start_y))
+            # Define control points for smooth curves
+            neck_start_x = mid_x - neck_width / 2
+            neck_end_x = mid_x + neck_width / 2
+            bulb_start_x = mid_x - bulb_width / 2
+            bulb_end_x = mid_x + bulb_width / 2
             
-            # Create circular tab/blank
+            # Add points along the straight edge before the tab
+            straight_end = neck_start_x - edge_length * 0.05
+            path.append((straight_end, start_y))
+            
             if tab_direction == 1:  # Tab out (up)
-                # Arc going up
-                for angle in np.linspace(180, 0, 20):
-                    x = mid_x + tab_radius * np.cos(np.radians(angle))
-                    y = start_y - tab_radius * (1 - np.cos(np.radians(angle)))
-                    path.append((x, y))
-            else:  # Blank in (down)
-                # Arc going down
-                for angle in np.linspace(180, 0, 20):
-                    x = mid_x + tab_radius * np.cos(np.radians(angle))
-                    y = start_y + tab_radius * (1 - np.cos(np.radians(angle)))
-                    path.append((x, y))
+                # Bezier curve from straight edge to neck start
+                for t in np.linspace(0, 1, 10):
+                    pt = self.bezier_curve(t,
+                        (straight_end, start_y),
+                        (neck_start_x - edge_length * 0.03, start_y),
+                        (neck_start_x, start_y - tab_height * 0.1),
+                        (neck_start_x, start_y - tab_height * 0.3))
+                    path.append(pt)
+                
+                # Bezier curve for neck to bulb transition
+                for t in np.linspace(0, 1, 10)[1:]:
+                    pt = self.bezier_curve(t,
+                        (neck_start_x, start_y - tab_height * 0.3),
+                        (neck_start_x, start_y - tab_height * 0.5),
+                        (bulb_start_x, start_y - tab_height * 0.7),
+                        (bulb_start_x, start_y - tab_height * 0.85))
+                    path.append(pt)
+                
+                # Bezier curve for bulb top (rounded)
+                for t in np.linspace(0, 1, 15)[1:]:
+                    pt = self.bezier_curve(t,
+                        (bulb_start_x, start_y - tab_height * 0.85),
+                        (bulb_start_x, start_y - tab_height),
+                        (bulb_end_x, start_y - tab_height),
+                        (bulb_end_x, start_y - tab_height * 0.85))
+                    path.append(pt)
+                
+                # Bezier curve for bulb to neck transition (other side)
+                for t in np.linspace(0, 1, 10)[1:]:
+                    pt = self.bezier_curve(t,
+                        (bulb_end_x, start_y - tab_height * 0.85),
+                        (bulb_end_x, start_y - tab_height * 0.7),
+                        (neck_end_x, start_y - tab_height * 0.5),
+                        (neck_end_x, start_y - tab_height * 0.3))
+                    path.append(pt)
+                
+                # Bezier curve from neck end back to straight edge
+                for t in np.linspace(0, 1, 10)[1:]:
+                    pt = self.bezier_curve(t,
+                        (neck_end_x, start_y - tab_height * 0.3),
+                        (neck_end_x, start_y - tab_height * 0.1),
+                        (neck_end_x + edge_length * 0.03, start_y),
+                        (neck_end_x + edge_length * 0.05, start_y))
+                    path.append(pt)
+                    
+            else:  # Blank in (down) - mirror of tab
+                # Similar curves but going down instead of up
+                for t in np.linspace(0, 1, 10):
+                    pt = self.bezier_curve(t,
+                        (straight_end, start_y),
+                        (neck_start_x - edge_length * 0.03, start_y),
+                        (neck_start_x, start_y + tab_height * 0.1),
+                        (neck_start_x, start_y + tab_height * 0.3))
+                    path.append(pt)
+                
+                for t in np.linspace(0, 1, 10)[1:]:
+                    pt = self.bezier_curve(t,
+                        (neck_start_x, start_y + tab_height * 0.3),
+                        (neck_start_x, start_y + tab_height * 0.5),
+                        (bulb_start_x, start_y + tab_height * 0.7),
+                        (bulb_start_x, start_y + tab_height * 0.85))
+                    path.append(pt)
+                
+                for t in np.linspace(0, 1, 15)[1:]:
+                    pt = self.bezier_curve(t,
+                        (bulb_start_x, start_y + tab_height * 0.85),
+                        (bulb_start_x, start_y + tab_height),
+                        (bulb_end_x, start_y + tab_height),
+                        (bulb_end_x, start_y + tab_height * 0.85))
+                    path.append(pt)
+                
+                for t in np.linspace(0, 1, 10)[1:]:
+                    pt = self.bezier_curve(t,
+                        (bulb_end_x, start_y + tab_height * 0.85),
+                        (bulb_end_x, start_y + tab_height * 0.7),
+                        (neck_end_x, start_y + tab_height * 0.5),
+                        (neck_end_x, start_y + tab_height * 0.3))
+                    path.append(pt)
+                
+                for t in np.linspace(0, 1, 10)[1:]:
+                    pt = self.bezier_curve(t,
+                        (neck_end_x, start_y + tab_height * 0.3),
+                        (neck_end_x, start_y + tab_height * 0.1),
+                        (neck_end_x + edge_length * 0.03, start_y),
+                        (neck_end_x + edge_length * 0.05, start_y))
+                    path.append(pt)
             
             # Complete the edge
-            neck_end_x = mid_x + neck_width
-            path.append((neck_end_x, start_y))
             path.append((end_x, end_y))
             
         else:  # Vertical edge
             edge_length = abs(end_y - start_y)
-            tab_radius = edge_length * self.tab_size / 2
-            neck_width = tab_radius * self.tab_neck_ratio
+            tab_width = edge_length * self.tab_size * 0.8
+            neck_height = edge_length * 0.15
+            bulb_height = edge_length * 0.25
             
-            # Create tab/blank path
-            path = [(start_x, start_y)]
+            path.append((start_x, start_y))
             
-            # Move to neck start
-            neck_start_y = mid_y - neck_width
-            path.append((start_x, neck_start_y))
+            neck_start_y = mid_y - neck_height / 2
+            neck_end_y = mid_y + neck_height / 2
+            bulb_start_y = mid_y - bulb_height / 2
+            bulb_end_y = mid_y + bulb_height / 2
             
-            # Create circular tab/blank
+            straight_end = neck_start_y - edge_length * 0.05
+            path.append((start_x, straight_end))
+            
             if tab_direction == 1:  # Tab out (left)
-                # Arc going left
-                for angle in np.linspace(90, -90, 20):
-                    x = start_x - tab_radius * (1 - np.sin(np.radians(angle)))
-                    y = mid_y + tab_radius * np.sin(np.radians(angle))
-                    path.append((x, y))
+                # Similar Bezier curves but for vertical orientation
+                for t in np.linspace(0, 1, 10):
+                    pt = self.bezier_curve(t,
+                        (start_x, straight_end),
+                        (start_x, neck_start_y - edge_length * 0.03),
+                        (start_x - tab_width * 0.1, neck_start_y),
+                        (start_x - tab_width * 0.3, neck_start_y))
+                    path.append(pt)
+                
+                for t in np.linspace(0, 1, 10)[1:]:
+                    pt = self.bezier_curve(t,
+                        (start_x - tab_width * 0.3, neck_start_y),
+                        (start_x - tab_width * 0.5, neck_start_y),
+                        (start_x - tab_width * 0.7, bulb_start_y),
+                        (start_x - tab_width * 0.85, bulb_start_y))
+                    path.append(pt)
+                
+                for t in np.linspace(0, 1, 15)[1:]:
+                    pt = self.bezier_curve(t,
+                        (start_x - tab_width * 0.85, bulb_start_y),
+                        (start_x - tab_width, bulb_start_y),
+                        (start_x - tab_width, bulb_end_y),
+                        (start_x - tab_width * 0.85, bulb_end_y))
+                    path.append(pt)
+                
+                for t in np.linspace(0, 1, 10)[1:]:
+                    pt = self.bezier_curve(t,
+                        (start_x - tab_width * 0.85, bulb_end_y),
+                        (start_x - tab_width * 0.7, bulb_end_y),
+                        (start_x - tab_width * 0.5, neck_end_y),
+                        (start_x - tab_width * 0.3, neck_end_y))
+                    path.append(pt)
+                
+                for t in np.linspace(0, 1, 10)[1:]:
+                    pt = self.bezier_curve(t,
+                        (start_x - tab_width * 0.3, neck_end_y),
+                        (start_x - tab_width * 0.1, neck_end_y),
+                        (start_x, neck_end_y + edge_length * 0.03),
+                        (start_x, neck_end_y + edge_length * 0.05))
+                    path.append(pt)
+                    
             else:  # Blank in (right)
-                # Arc going right
-                for angle in np.linspace(90, -90, 20):
-                    x = start_x + tab_radius * (1 - np.sin(np.radians(angle)))
-                    y = mid_y + tab_radius * np.sin(np.radians(angle))
-                    path.append((x, y))
+                for t in np.linspace(0, 1, 10):
+                    pt = self.bezier_curve(t,
+                        (start_x, straight_end),
+                        (start_x, neck_start_y - edge_length * 0.03),
+                        (start_x + tab_width * 0.1, neck_start_y),
+                        (start_x + tab_width * 0.3, neck_start_y))
+                    path.append(pt)
+                
+                for t in np.linspace(0, 1, 10)[1:]:
+                    pt = self.bezier_curve(t,
+                        (start_x + tab_width * 0.3, neck_start_y),
+                        (start_x + tab_width * 0.5, neck_start_y),
+                        (start_x + tab_width * 0.7, bulb_start_y),
+                        (start_x + tab_width * 0.85, bulb_start_y))
+                    path.append(pt)
+                
+                for t in np.linspace(0, 1, 15)[1:]:
+                    pt = self.bezier_curve(t,
+                        (start_x + tab_width * 0.85, bulb_start_y),
+                        (start_x + tab_width, bulb_start_y),
+                        (start_x + tab_width, bulb_end_y),
+                        (start_x + tab_width * 0.85, bulb_end_y))
+                    path.append(pt)
+                
+                for t in np.linspace(0, 1, 10)[1:]:
+                    pt = self.bezier_curve(t,
+                        (start_x + tab_width * 0.85, bulb_end_y),
+                        (start_x + tab_width * 0.7, bulb_end_y),
+                        (start_x + tab_width * 0.5, neck_end_y),
+                        (start_x + tab_width * 0.3, neck_end_y))
+                    path.append(pt)
+                
+                for t in np.linspace(0, 1, 10)[1:]:
+                    pt = self.bezier_curve(t,
+                        (start_x + tab_width * 0.3, neck_end_y),
+                        (start_x + tab_width * 0.1, neck_end_y),
+                        (start_x, neck_end_y + edge_length * 0.03),
+                        (start_x, neck_end_y + edge_length * 0.05))
+                    path.append(pt)
             
-            # Complete the edge
-            neck_end_y = mid_y + neck_width
-            path.append((start_x, neck_end_y))
             path.append((end_x, end_y))
         
         return path
