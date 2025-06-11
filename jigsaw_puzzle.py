@@ -4,6 +4,8 @@ import os
 from typing import List, Tuple, Dict
 import random
 import math
+import sys
+import argparse
 
 
 class JigsawPuzzle:
@@ -28,7 +30,7 @@ class JigsawPuzzle:
     def generate_edge_pattern(self):
         """Generate interlocking edge pattern ensuring pieces fit together."""
         # AIDEV-NOTE: For each internal edge, randomly assign tab/blank
-        # ensuring matching edges have opposite values
+        # The same edge value is shared by adjacent pieces but interpreted oppositely
         
         # Generate horizontal edges (vertical connections)
         for r in range(self.rows):
@@ -41,6 +43,49 @@ class JigsawPuzzle:
             for c in range(self.cols):
                 # Randomly assign tab (1) or blank (-1)
                 self.v_edges[r, c] = random.choice([1, -1])
+    
+    def debug_edge_matching(self):
+        """Debug function to verify adjacent pieces have complementary edges."""
+        print("\nEdge Matching Debug:")
+        print("=" * 50)
+        
+        # Let's trace a specific example
+        print("\nDetailed trace for pieces [0,0] and [0,1]:")
+        print(f"h_edges[0,1] = {self.h_edges[0,1]}")
+        print(f"Piece [0,0] right edge value: {self.h_edges[0,1]}")
+        print(f"Piece [0,1] left edge value: {-self.h_edges[0,1]}")
+        
+        # Check horizontal adjacencies
+        for row in range(self.rows):
+            for col in range(self.cols - 1):
+                # Right edge of current piece
+                right_edge_current = self.h_edges[row, col + 1]
+                # Left edge of piece to the right (inverted)
+                left_edge_next = -self.h_edges[row, col + 1]
+                
+                print(f"Piece [{row},{col}] right edge: {right_edge_current:+.0f} | "
+                      f"Piece [{row},{col+1}] left edge: {left_edge_next:+.0f}")
+                
+                if right_edge_current == left_edge_next:
+                    print("  ✗ ERROR: Same edge type!")
+                else:
+                    print("  ✓ OK: Complementary edges")
+        
+        # Check vertical adjacencies
+        for row in range(self.rows - 1):
+            for col in range(self.cols):
+                # Bottom edge of current piece
+                bottom_edge_current = -self.v_edges[row + 1, col]
+                # Top edge of piece below
+                top_edge_next = self.v_edges[row + 1, col]
+                
+                print(f"Piece [{row},{col}] bottom edge: {bottom_edge_current:+.0f} | "
+                      f"Piece [{row+1},{col}] top edge: {top_edge_next:+.0f}")
+                
+                if bottom_edge_current == top_edge_next:
+                    print("  ✗ ERROR: Same edge type!")
+                else:
+                    print("  ✓ OK: Complementary edges")
     
     def bezier_curve(self, t: float, p0: Tuple[float, float], p1: Tuple[float, float], 
                      p2: Tuple[float, float], p3: Tuple[float, float]) -> Tuple[float, float]:
@@ -58,7 +103,7 @@ class JigsawPuzzle:
         return (x, y)
     
     def create_tab_path(self, start_x: float, start_y: float, end_x: float, end_y: float, 
-                       tab_direction: int, is_horizontal: bool) -> List[Tuple[float, float]]:
+                       tab_direction: int, is_horizontal: bool, edge_name: str) -> List[Tuple[float, float]]:
         """Create a smooth path for a single edge with optional tab/blank using Bezier curves."""
         if tab_direction == 0:  # Straight edge
             return [(start_x, start_y), (end_x, end_y)]
@@ -89,90 +134,106 @@ class JigsawPuzzle:
             straight_end = neck_start_x - edge_length * 0.05
             path.append((straight_end, start_y))
             
-            if tab_direction == 1:  # Tab out (up)
+            # AIDEV-NOTE: For horizontal edges, direction depends on which edge
+            # Top edge: positive = tab up (negative Y)
+            # Bottom edge: positive = tab down (positive Y)
+            
+            if tab_direction == 1:  # Tab out
+                # Determine direction based on edge
+                if edge_name == 'top':
+                    y_direction = -1  # Tab goes up
+                else:  # edge_name == 'bottom'
+                    y_direction = 1  # Tab goes down
+                    
                 # Bezier curve from straight edge to neck start
                 for t in np.linspace(0, 1, 10):
                     pt = self.bezier_curve(t,
                         (straight_end, start_y),
                         (neck_start_x - edge_length * 0.03, start_y),
-                        (neck_start_x, start_y - tab_height * 0.1),
-                        (neck_start_x, start_y - tab_height * 0.3))
+                        (neck_start_x, start_y + y_direction * tab_height * 0.1),
+                        (neck_start_x, start_y + y_direction * tab_height * 0.3))
                     path.append(pt)
                 
                 # Bezier curve for neck to bulb transition
                 for t in np.linspace(0, 1, 10)[1:]:
                     pt = self.bezier_curve(t,
-                        (neck_start_x, start_y - tab_height * 0.3),
-                        (neck_start_x, start_y - tab_height * 0.5),
-                        (bulb_start_x, start_y - tab_height * 0.7),
-                        (bulb_start_x, start_y - tab_height * 0.85))
+                        (neck_start_x, start_y + y_direction * tab_height * 0.3),
+                        (neck_start_x, start_y + y_direction * tab_height * 0.5),
+                        (bulb_start_x, start_y + y_direction * tab_height * 0.7),
+                        (bulb_start_x, start_y + y_direction * tab_height * 0.85))
                     path.append(pt)
                 
                 # Bezier curve for bulb top (rounded)
                 for t in np.linspace(0, 1, 15)[1:]:
                     pt = self.bezier_curve(t,
-                        (bulb_start_x, start_y - tab_height * 0.85),
-                        (bulb_start_x, start_y - tab_height),
-                        (bulb_end_x, start_y - tab_height),
-                        (bulb_end_x, start_y - tab_height * 0.85))
+                        (bulb_start_x, start_y + y_direction * tab_height * 0.85),
+                        (bulb_start_x, start_y + y_direction * tab_height),
+                        (bulb_end_x, start_y + y_direction * tab_height),
+                        (bulb_end_x, start_y + y_direction * tab_height * 0.85))
                     path.append(pt)
                 
                 # Bezier curve for bulb to neck transition (other side)
                 for t in np.linspace(0, 1, 10)[1:]:
                     pt = self.bezier_curve(t,
-                        (bulb_end_x, start_y - tab_height * 0.85),
-                        (bulb_end_x, start_y - tab_height * 0.7),
-                        (neck_end_x, start_y - tab_height * 0.5),
-                        (neck_end_x, start_y - tab_height * 0.3))
+                        (bulb_end_x, start_y + y_direction * tab_height * 0.85),
+                        (bulb_end_x, start_y + y_direction * tab_height * 0.7),
+                        (neck_end_x, start_y + y_direction * tab_height * 0.5),
+                        (neck_end_x, start_y + y_direction * tab_height * 0.3))
                     path.append(pt)
                 
                 # Bezier curve from neck end back to straight edge
                 for t in np.linspace(0, 1, 10)[1:]:
                     pt = self.bezier_curve(t,
-                        (neck_end_x, start_y - tab_height * 0.3),
-                        (neck_end_x, start_y - tab_height * 0.1),
+                        (neck_end_x, start_y + y_direction * tab_height * 0.3),
+                        (neck_end_x, start_y + y_direction * tab_height * 0.1),
                         (neck_end_x + edge_length * 0.03, start_y),
                         (neck_end_x + edge_length * 0.05, start_y))
                     path.append(pt)
                     
-            else:  # Blank in (down) - mirror of tab
-                # Similar curves but going down instead of up
+            else:  # Blank in
+                # Determine direction based on edge (opposite of tab)
+                if edge_name == 'top':
+                    y_direction = 1  # Groove goes down (inward)
+                else:  # edge_name == 'bottom'
+                    y_direction = -1  # Groove goes up (inward)
+                    
+                # Similar curves but going inward
                 for t in np.linspace(0, 1, 10):
                     pt = self.bezier_curve(t,
                         (straight_end, start_y),
                         (neck_start_x - edge_length * 0.03, start_y),
-                        (neck_start_x, start_y + tab_height * 0.1),
-                        (neck_start_x, start_y + tab_height * 0.3))
+                        (neck_start_x, start_y + y_direction * tab_height * 0.1),
+                        (neck_start_x, start_y + y_direction * tab_height * 0.3))
                     path.append(pt)
                 
                 for t in np.linspace(0, 1, 10)[1:]:
                     pt = self.bezier_curve(t,
-                        (neck_start_x, start_y + tab_height * 0.3),
-                        (neck_start_x, start_y + tab_height * 0.5),
-                        (bulb_start_x, start_y + tab_height * 0.7),
-                        (bulb_start_x, start_y + tab_height * 0.85))
+                        (neck_start_x, start_y + y_direction * tab_height * 0.3),
+                        (neck_start_x, start_y + y_direction * tab_height * 0.5),
+                        (bulb_start_x, start_y + y_direction * tab_height * 0.7),
+                        (bulb_start_x, start_y + y_direction * tab_height * 0.85))
                     path.append(pt)
                 
                 for t in np.linspace(0, 1, 15)[1:]:
                     pt = self.bezier_curve(t,
-                        (bulb_start_x, start_y + tab_height * 0.85),
-                        (bulb_start_x, start_y + tab_height),
-                        (bulb_end_x, start_y + tab_height),
-                        (bulb_end_x, start_y + tab_height * 0.85))
+                        (bulb_start_x, start_y + y_direction * tab_height * 0.85),
+                        (bulb_start_x, start_y + y_direction * tab_height),
+                        (bulb_end_x, start_y + y_direction * tab_height),
+                        (bulb_end_x, start_y + y_direction * tab_height * 0.85))
                     path.append(pt)
                 
                 for t in np.linspace(0, 1, 10)[1:]:
                     pt = self.bezier_curve(t,
-                        (bulb_end_x, start_y + tab_height * 0.85),
-                        (bulb_end_x, start_y + tab_height * 0.7),
-                        (neck_end_x, start_y + tab_height * 0.5),
-                        (neck_end_x, start_y + tab_height * 0.3))
+                        (bulb_end_x, start_y + y_direction * tab_height * 0.85),
+                        (bulb_end_x, start_y + y_direction * tab_height * 0.7),
+                        (neck_end_x, start_y + y_direction * tab_height * 0.5),
+                        (neck_end_x, start_y + y_direction * tab_height * 0.3))
                     path.append(pt)
                 
                 for t in np.linspace(0, 1, 10)[1:]:
                     pt = self.bezier_curve(t,
-                        (neck_end_x, start_y + tab_height * 0.3),
-                        (neck_end_x, start_y + tab_height * 0.1),
+                        (neck_end_x, start_y + y_direction * tab_height * 0.3),
+                        (neck_end_x, start_y + y_direction * tab_height * 0.1),
                         (neck_end_x + edge_length * 0.03, start_y),
                         (neck_end_x + edge_length * 0.05, start_y))
                     path.append(pt)
@@ -196,85 +257,100 @@ class JigsawPuzzle:
             straight_end = neck_start_y - edge_length * 0.05
             path.append((start_x, straight_end))
             
-            if tab_direction == 1:  # Tab out (left)
+            # AIDEV-NOTE: For vertical edges, direction depends on which edge
+            # Right edge: positive = tab right (positive X)
+            # Left edge: positive = tab left (negative X)
+            
+            if tab_direction == 1:  # Tab out
+                # Determine direction based on edge
+                if edge_name == 'right':
+                    x_direction = 1  # Tab goes right
+                else:  # edge_name == 'left'
+                    x_direction = -1  # Tab goes left
                 # Similar Bezier curves but for vertical orientation
                 for t in np.linspace(0, 1, 10):
                     pt = self.bezier_curve(t,
                         (start_x, straight_end),
                         (start_x, neck_start_y - edge_length * 0.03),
-                        (start_x - tab_width * 0.1, neck_start_y),
-                        (start_x - tab_width * 0.3, neck_start_y))
+                        (start_x + x_direction * tab_width * 0.1, neck_start_y),
+                        (start_x + x_direction * tab_width * 0.3, neck_start_y))
                     path.append(pt)
                 
                 for t in np.linspace(0, 1, 10)[1:]:
                     pt = self.bezier_curve(t,
-                        (start_x - tab_width * 0.3, neck_start_y),
-                        (start_x - tab_width * 0.5, neck_start_y),
-                        (start_x - tab_width * 0.7, bulb_start_y),
-                        (start_x - tab_width * 0.85, bulb_start_y))
+                        (start_x + x_direction * tab_width * 0.3, neck_start_y),
+                        (start_x + x_direction * tab_width * 0.5, neck_start_y),
+                        (start_x + x_direction * tab_width * 0.7, bulb_start_y),
+                        (start_x + x_direction * tab_width * 0.85, bulb_start_y))
                     path.append(pt)
                 
                 for t in np.linspace(0, 1, 15)[1:]:
                     pt = self.bezier_curve(t,
-                        (start_x - tab_width * 0.85, bulb_start_y),
-                        (start_x - tab_width, bulb_start_y),
-                        (start_x - tab_width, bulb_end_y),
-                        (start_x - tab_width * 0.85, bulb_end_y))
+                        (start_x + x_direction * tab_width * 0.85, bulb_start_y),
+                        (start_x + x_direction * tab_width, bulb_start_y),
+                        (start_x + x_direction * tab_width, bulb_end_y),
+                        (start_x + x_direction * tab_width * 0.85, bulb_end_y))
                     path.append(pt)
                 
                 for t in np.linspace(0, 1, 10)[1:]:
                     pt = self.bezier_curve(t,
-                        (start_x - tab_width * 0.85, bulb_end_y),
-                        (start_x - tab_width * 0.7, bulb_end_y),
-                        (start_x - tab_width * 0.5, neck_end_y),
-                        (start_x - tab_width * 0.3, neck_end_y))
+                        (start_x + x_direction * tab_width * 0.85, bulb_end_y),
+                        (start_x + x_direction * tab_width * 0.7, bulb_end_y),
+                        (start_x + x_direction * tab_width * 0.5, neck_end_y),
+                        (start_x + x_direction * tab_width * 0.3, neck_end_y))
                     path.append(pt)
                 
                 for t in np.linspace(0, 1, 10)[1:]:
                     pt = self.bezier_curve(t,
-                        (start_x - tab_width * 0.3, neck_end_y),
-                        (start_x - tab_width * 0.1, neck_end_y),
+                        (start_x + x_direction * tab_width * 0.3, neck_end_y),
+                        (start_x + x_direction * tab_width * 0.1, neck_end_y),
                         (start_x, neck_end_y + edge_length * 0.03),
                         (start_x, neck_end_y + edge_length * 0.05))
                     path.append(pt)
                     
-            else:  # Blank in (right)
+            else:  # Blank in
+                # Determine direction based on edge (opposite of tab)
+                if edge_name == 'right':
+                    x_direction = -1  # Groove goes left (inward)
+                else:  # edge_name == 'left'
+                    x_direction = 1  # Groove goes right (inward)
+                    
                 for t in np.linspace(0, 1, 10):
                     pt = self.bezier_curve(t,
                         (start_x, straight_end),
                         (start_x, neck_start_y - edge_length * 0.03),
-                        (start_x + tab_width * 0.1, neck_start_y),
-                        (start_x + tab_width * 0.3, neck_start_y))
+                        (start_x + x_direction * tab_width * 0.1, neck_start_y),
+                        (start_x + x_direction * tab_width * 0.3, neck_start_y))
                     path.append(pt)
                 
                 for t in np.linspace(0, 1, 10)[1:]:
                     pt = self.bezier_curve(t,
-                        (start_x + tab_width * 0.3, neck_start_y),
-                        (start_x + tab_width * 0.5, neck_start_y),
-                        (start_x + tab_width * 0.7, bulb_start_y),
-                        (start_x + tab_width * 0.85, bulb_start_y))
+                        (start_x + x_direction * tab_width * 0.3, neck_start_y),
+                        (start_x + x_direction * tab_width * 0.5, neck_start_y),
+                        (start_x + x_direction * tab_width * 0.7, bulb_start_y),
+                        (start_x + x_direction * tab_width * 0.85, bulb_start_y))
                     path.append(pt)
                 
                 for t in np.linspace(0, 1, 15)[1:]:
                     pt = self.bezier_curve(t,
-                        (start_x + tab_width * 0.85, bulb_start_y),
-                        (start_x + tab_width, bulb_start_y),
-                        (start_x + tab_width, bulb_end_y),
-                        (start_x + tab_width * 0.85, bulb_end_y))
+                        (start_x + x_direction * tab_width * 0.85, bulb_start_y),
+                        (start_x + x_direction * tab_width, bulb_start_y),
+                        (start_x + x_direction * tab_width, bulb_end_y),
+                        (start_x + x_direction * tab_width * 0.85, bulb_end_y))
                     path.append(pt)
                 
                 for t in np.linspace(0, 1, 10)[1:]:
                     pt = self.bezier_curve(t,
-                        (start_x + tab_width * 0.85, bulb_end_y),
-                        (start_x + tab_width * 0.7, bulb_end_y),
-                        (start_x + tab_width * 0.5, neck_end_y),
-                        (start_x + tab_width * 0.3, neck_end_y))
+                        (start_x + x_direction * tab_width * 0.85, bulb_end_y),
+                        (start_x + x_direction * tab_width * 0.7, bulb_end_y),
+                        (start_x + x_direction * tab_width * 0.5, neck_end_y),
+                        (start_x + x_direction * tab_width * 0.3, neck_end_y))
                     path.append(pt)
                 
                 for t in np.linspace(0, 1, 10)[1:]:
                     pt = self.bezier_curve(t,
-                        (start_x + tab_width * 0.3, neck_end_y),
-                        (start_x + tab_width * 0.1, neck_end_y),
+                        (start_x + x_direction * tab_width * 0.3, neck_end_y),
+                        (start_x + x_direction * tab_width * 0.1, neck_end_y),
                         (start_x, neck_end_y + edge_length * 0.03),
                         (start_x, neck_end_y + edge_length * 0.05))
                     path.append(pt)
@@ -302,24 +378,30 @@ class JigsawPuzzle:
         # Build piece outline
         outline = []
         
-        # Top edge
+        # AIDEV-NOTE: Edge direction convention:
+        # - Positive value = tab/bulge outward from the piece
+        # - Negative value = groove/indent inward into the piece
+        # - Adjacent pieces share the same edge value in the matrix
+        # - But they interpret it oppositely (one sees tab out, other sees groove in)
+        
+        # Top edge - use value as-is (positive = tab up)
         top_edge = self.v_edges[row, col]
-        top_path = self.create_tab_path(left, top, right, top, top_edge, True)
+        top_path = self.create_tab_path(left, top, right, top, top_edge, True, 'top')
         outline.extend(top_path)
         
-        # Right edge
+        # Right edge - use value as-is (positive = tab right)
         right_edge = self.h_edges[row, col + 1]
-        right_path = self.create_tab_path(right, top, right, bottom, right_edge, False)
+        right_path = self.create_tab_path(right, top, right, bottom, right_edge, False, 'right')
         outline.extend(right_path[1:])  # Skip duplicate corner point
         
-        # Bottom edge
-        bottom_edge = -self.v_edges[row + 1, col]  # Invert for matching
-        bottom_path = self.create_tab_path(right, bottom, left, bottom, bottom_edge, True)
+        # Bottom edge - invert because piece below sees it oppositely
+        bottom_edge = -self.v_edges[row + 1, col]
+        bottom_path = self.create_tab_path(right, bottom, left, bottom, bottom_edge, True, 'bottom')
         outline.extend(bottom_path[1:])
         
-        # Left edge
-        left_edge = -self.h_edges[row, col]  # Invert for matching
-        left_path = self.create_tab_path(left, bottom, left, top, left_edge, False)
+        # Left edge - invert because piece to left sees it oppositely
+        left_edge = -self.h_edges[row, col]
+        left_path = self.create_tab_path(left, bottom, left, top, left_edge, False, 'left')
         outline.extend(left_path[1:-1])  # Skip duplicate corner points
         
         # Draw filled polygon
@@ -416,18 +498,55 @@ class JigsawPuzzle:
 
 
 def main():
-    # Create jigsaw puzzle from lena.png
-    puzzle = JigsawPuzzle("lena.png", rows=4, cols=4)
+    # Set up argument parser
+    parser = argparse.ArgumentParser(description='Generate a jigsaw puzzle from an image')
+    parser.add_argument('image', help='Path to the input image file')
+    parser.add_argument('-r', '--rows', type=int, default=4, 
+                        help='Number of rows in the puzzle (default: 4)')
+    parser.add_argument('-c', '--cols', type=int, default=4,
+                        help='Number of columns in the puzzle (default: 4)')
+    parser.add_argument('-o', '--output', default='puzzle_pieces',
+                        help='Output directory for puzzle pieces (default: puzzle_pieces)')
+    parser.add_argument('--no-verify', action='store_true',
+                        help='Skip creating verification image')
+    parser.add_argument('--debug', action='store_true',
+                        help='Show debug information about edge matching')
+    
+    args = parser.parse_args()
+    
+    # Check if input file exists
+    if not os.path.exists(args.image):
+        print(f"Error: Input file '{args.image}' not found!")
+        sys.exit(1)
+    
+    # Check if file is an image
+    try:
+        # Try to open the image
+        test_img = Image.open(args.image)
+        test_img.close()
+    except Exception as e:
+        print(f"Error: Unable to open '{args.image}' as an image: {e}")
+        sys.exit(1)
+    
+    # Create jigsaw puzzle
+    print(f"Creating {args.rows}x{args.cols} jigsaw puzzle from '{args.image}'...")
+    puzzle = JigsawPuzzle(args.image, rows=args.rows, cols=args.cols)
     
     # Generate puzzle pieces
-    puzzle.generate_puzzle()
+    puzzle.generate_puzzle(args.output)
+    
+    # Debug edge matching if requested
+    if args.debug:
+        puzzle.debug_edge_matching()
     
     # Verify pieces fit together
-    puzzle.verify_puzzle()
+    if not args.no_verify:
+        puzzle.verify_puzzle(args.output)
     
-    print("\nPuzzle generation complete!")
-    print("Pieces saved in 'puzzle_pieces' directory")
-    print("Check 'verification.png' to see pieces reassembled")
+    print(f"\nPuzzle generation complete!")
+    print(f"Pieces saved in '{args.output}' directory")
+    if not args.no_verify:
+        print(f"Check '{args.output}/verification.png' to see pieces reassembled")
 
 
 if __name__ == "__main__":
